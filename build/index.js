@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v1.0.1
+// v1.0.5
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -375,6 +375,47 @@ server.tool("curl_advanced", "Execute curl with custom arguments (advanced usage
                 {
                     type: "text",
                     text: `Exit Code: ${result.exitCode}\n\nResponse:\n${result.stdout}${result.stderr ? `\n\nErrors:\n${result.stderr}` : ''}`,
+                },
+            ],
+        };
+    }
+    catch (error) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error executing curl: ${error instanceof Error ? error.message : String(error)}`,
+                },
+            ],
+        };
+    }
+});
+// Tool: Raw curl — full argument pass-through (no blacklist, requires allow_unsafe)
+server.tool("curl_raw", "Execute curl with arbitrary arguments — full pass-through, no blacklist. Requires allow_unsafe: true. Use with caution: this tool can read/write local files (-o, -T), send arbitrary data (-d, -F), use custom certs (--cert, --key), and route via proxies (--proxy).", {
+    args: z.array(z.string()).describe("Array of curl arguments (excluding 'curl' itself)"),
+    allow_unsafe: z.boolean().describe("Explicit confirmation to run curl without safety checks"),
+    max_output_bytes: z.number().optional().default(1048576).describe("Truncate stdout to this many bytes (default 1 MiB)"),
+}, async ({ args, allow_unsafe, max_output_bytes }) => {
+    if (!allow_unsafe) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: "Error: curl_raw requires allow_unsafe: true. This tool runs curl with arbitrary arguments and no blacklist.",
+                },
+            ],
+        };
+    }
+    try {
+        const result = await executeCurl(['curl', ...args]);
+        const stdout = result.stdout.length > max_output_bytes
+            ? result.stdout.slice(0, max_output_bytes) + `\n\n[truncated: output exceeded ${max_output_bytes} bytes]`
+            : result.stdout;
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Exit Code: ${result.exitCode}\n\nResponse:\n${stdout}${result.stderr ? `\n\nErrors:\n${result.stderr}` : ''}`,
                 },
             ],
         };
