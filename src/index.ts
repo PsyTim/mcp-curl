@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// v1.0.1
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -134,7 +135,7 @@ server.tool(
   {
     url: z.string().describe("The URL to make the POST request to"),
     data: z.string().optional().describe("Data to send in the POST request body"),
-    json_data: z.record(z.any()).optional().describe("JSON object to send as POST data"),
+    json_data: z.record(z.string(), z.any()).optional().describe("JSON object to send as POST data"),
     headers: z.array(z.string()).optional().describe("Optional HTTP headers in the format 'Header: Value'"),
     content_type: z.string().optional().describe("Content-Type header (will be added automatically for JSON data)"),
     follow_redirects: z.boolean().optional().default(false).describe("Whether to follow redirects"),
@@ -215,7 +216,7 @@ server.tool(
   {
     url: z.string().describe("The URL to make the PUT request to"),
     data: z.string().optional().describe("Data to send in the PUT request body"),
-    json_data: z.record(z.any()).optional().describe("JSON object to send as PUT data"),
+    json_data: z.record(z.string(), z.any()).optional().describe("JSON object to send as PUT data"),
     headers: z.array(z.string()).optional().describe("Optional HTTP headers in the format 'Header: Value'"),
     content_type: z.string().optional().describe("Content-Type header (will be added automatically for JSON data)"),
     follow_redirects: z.boolean().optional().default(false).describe("Whether to follow redirects"),

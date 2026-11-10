@@ -131,3 +131,6 @@ build/Release/
 
 # Backup files
 README_OLD.md
+
+# AIPrjects extension backups
+.patches_backup/

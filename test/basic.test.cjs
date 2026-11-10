@@ -1,3 +1,4 @@
+// v1.0.2
 const { spawn } = require('child_process');
 const path = require('path');
 
@@ -17,6 +18,7 @@ describe('MCP Curl Server', () => {
         if (response.result && response.result.tools) {
           expect(response.result.tools.length).toBeGreaterThan(0);
           expect(response.result.tools[0]).toHaveProperty('name');
+          clearTimeout(timeoutHandle);
           server.kill();
           done();
         }
@@ -41,7 +43,7 @@ describe('MCP Curl Server', () => {
     server.stdin.end();
     
     // Timeout after 5 seconds
-    setTimeout(() => {
+    const timeoutHandle = setTimeout(() => {
       server.kill();
       done(new Error('Test timeout'));
     }, 5000);

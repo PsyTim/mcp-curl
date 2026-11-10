@@ -11,7 +11,7 @@
     "build": "tsc && chmod +x build/index.js",
     "start": "node build/index.js",
     "dev": "tsc --watch",
-    "test": "echo \"Tests require dev dependencies. Run 'npm install' to install them.\" && exit 0",
+    "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
@@ -64,7 +64,7 @@
   "jest": {
     "testEnvironment": "node",
     "testMatch": [
-      "**/test/**/*.test.js"
+      "**/test/**/*.test.cjs"
     ],
     "collectCoverageFrom": [
       "src/**/*.ts",
