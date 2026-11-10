@@ -134,3 +134,6 @@ README_OLD.md
 
 # AIPrjects extension backups
 .patches_backup/
+
+# curl_raw audit log
+curl_raw.log

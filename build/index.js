@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-// v1.1.0
+// v1.2.0
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { spawn } from "child_process";
 import { promisify } from "util";
 import { exec } from "child_process";
+import { promises as dnsPromises } from "dns";
+import * as net from "net";
+import { promises as fsPromises } from "fs";
+import * as path from "path";
 const execAsync = promisify(exec);
 // Create server instance
 const server = new McpServer({
@@ -394,8 +398,9 @@ server.tool("curl_advanced", "Execute curl with custom arguments (advanced usage
 server.tool("curl_raw", "Execute curl with arbitrary arguments — full pass-through, no blacklist. Requires allow_unsafe: true. Use with caution: this tool can read/write local files (-o, -T), send arbitrary data (-d, -F), use custom certs (--cert, --key), and route via proxies (--proxy).", {
     args: z.array(z.string()).describe("Array of curl arguments (excluding 'curl' itself)"),
     allow_unsafe: z.boolean().describe("Explicit confirmation to run curl without safety checks"),
+    allow_private: z.boolean().optional().default(false).describe("Allow requests to private/loopback/link-local IPs. Blocks SSRF (incl. 169.254.169.254 cloud metadata) by default."),
     max_output_bytes: z.number().optional().default(1048576).describe("Truncate stdout to this many bytes (default 1 MiB)"),
-}, async ({ args, allow_unsafe, max_output_bytes }) => {
+}, async ({ args, allow_unsafe, max_output_bytes, allow_private }) => {
     if (!allow_unsafe) {
         return {
             content: [
@@ -407,7 +412,16 @@ server.tool("curl_raw", "Execute curl with arbitrary arguments — full pass-thr
         };
     }
     try {
-        const result = await executeCurl(['curl', ...args]);
+        const guardedArgs = applyCurlDefaults(args);
+        const hostCheck = await checkPrivateUrls(extractUrlsFromArgs(guardedArgs), allow_private);
+        if (hostCheck) {
+            return {
+                content: [{ type: "text", text: hostCheck }],
+            };
+        }
+        const startedAt = Date.now();
+        const result = await executeCurl(['curl', ...guardedArgs]);
+        await logCurlRaw({ args: guardedArgs, exitCode: result.exitCode, durationMs: Date.now() - startedAt });
         const stdout = result.stdout.length > max_output_bytes
             ? result.stdout.slice(0, max_output_bytes) + `\n\n[truncated: output exceeded ${max_output_bytes} bytes]`
             : result.stdout;
@@ -431,6 +445,126 @@ server.tool("curl_raw", "Execute curl with arbitrary arguments — full pass-thr
         };
     }
 });
+function applyCurlDefaults(args) {
+    const has = (f) => args.includes(f);
+    const out = [...args];
+    if (!has("--max-time") && !has("-m"))
+        out.unshift("--max-time", "300");
+    if (!has("--max-filesize"))
+        out.unshift("--max-filesize", "104857600");
+    return out;
+}
+function sanitizeArgs(args) {
+    const sensitive = /^(authorization|cookie|x-api-key|x-auth-token|api-key|proxy-authorization):/i;
+    const out = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if ((a === "-H" || a === "--header") && i + 1 < args.length) {
+            const header = args[i + 1];
+            if (sensitive.test(header)) {
+                out.push(a, header.split(":")[0] + ": [REDACTED]");
+                i++;
+                continue;
+            }
+        }
+        if ((a === "-u" || a === "--user") && i + 1 < args.length) {
+            out.push(a, "[REDACTED]");
+            i++;
+            continue;
+        }
+        out.push(a);
+    }
+    return out;
+}
+async function logCurlRaw(entry) {
+    try {
+        const logPath = process.env.MCP_CURL_RAW_LOG || path.join(process.cwd(), "curl_raw.log");
+        const line = JSON.stringify({
+            timestamp: new Date().toISOString(),
+            args: sanitizeArgs(entry.args),
+            exitCode: entry.exitCode,
+            durationMs: entry.durationMs,
+        }) + "\n";
+        await fsPromises.appendFile(logPath, line);
+    }
+    catch (err) {
+        console.error("Failed to write curl_raw log:", err instanceof Error ? err.message : String(err));
+    }
+}
+function ipToLong(ip) {
+    const parts = ip.split(".");
+    if (parts.length !== 4)
+        return null;
+    let n = 0;
+    for (const p of parts) {
+        const v = parseInt(p, 10);
+        if (isNaN(v) || v < 0 || v > 255)
+            return null;
+        n = (n << 8) | v;
+    }
+    return n >>> 0;
+}
+function isPrivateIpv4(ip) {
+    const n = ipToLong(ip);
+    if (n === null)
+        return false;
+    const ranges = [
+        ["0.0.0.0", "0.255.255.255"],
+        ["10.0.0.0", "10.255.255.255"],
+        ["100.64.0.0", "100.127.255.255"],
+        ["127.0.0.0", "127.255.255.255"],
+        ["169.254.0.0", "169.254.255.255"],
+        ["172.16.0.0", "172.31.255.255"],
+        ["192.168.0.0", "192.168.255.255"],
+    ];
+    return ranges.some(([s, e]) => n >= ipToLong(s) && n <= ipToLong(e));
+}
+function isPrivateIp(ip) {
+    if (net.isIPv4(ip))
+        return isPrivateIpv4(ip);
+    const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    if (mapped)
+        return isPrivateIpv4(mapped[1]);
+    if (net.isIPv6(ip)) {
+        const lower = ip.toLowerCase();
+        if (lower === "::1")
+            return true;
+        if (lower.startsWith("fc") || lower.startsWith("fd"))
+            return true;
+        if (lower.startsWith("fe80"))
+            return true;
+    }
+    return false;
+}
+function extractUrlsFromArgs(args) {
+    const urls = [];
+    for (const a of args) {
+        if (a.startsWith("-") || !a.includes("://"))
+            continue;
+        try {
+            urls.push(new URL(a).href);
+        }
+        catch { /* ignore */ }
+    }
+    return urls;
+}
+async function checkPrivateUrls(urls, allowPrivate) {
+    if (allowPrivate || urls.length === 0)
+        return null;
+    for (const url of urls) {
+        try {
+            const u = new URL(url);
+            const addresses = await dnsPromises.lookup(u.hostname, { all: true });
+            for (const addr of addresses) {
+                if (isPrivateIp(addr.address)) {
+                    return `Error: Refusing to connect to private/loopback/link-local address ${addr.address} (host: ${u.hostname}). Pass allow_private: true to override.`;
+                }
+            }
+        }
+        catch { /* DNS failed — let curl report it */ }
+    }
+    return null;
+}
 async function main() {
     if (process.env.MCP_TRANSPORT === "http" || process.env.PORT) {
         await startHttpServer();
@@ -446,6 +580,15 @@ async function startHttpServer() {
     const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
     const app = express();
     app.use(express.json({ limit: "10mb" }));
+    const { default: rateLimit } = await import("express-rate-limit");
+    const limiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: parseInt(process.env.MCP_RATE_LIMIT_PER_MIN || "60", 10),
+        standardHeaders: "draft-7",
+        legacyHeaders: false,
+        message: { error: "Too many requests, try again later" },
+    });
+    app.use("/mcp", limiter);
     const apiKey = process.env.MCP_API_KEY;
     const host = process.env.HOST || "127.0.0.1";
     const port = parseInt(process.env.PORT || "3000", 10);
