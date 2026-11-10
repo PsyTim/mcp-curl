@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v1.0.5
+// v1.1.0
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -432,10 +432,58 @@ server.tool("curl_raw", "Execute curl with arbitrary arguments — full pass-thr
     }
 });
 async function main() {
+    if (process.env.MCP_TRANSPORT === "http" || process.env.PORT) {
+        await startHttpServer();
+        return;
+    }
     const transport = new StdioServerTransport();
     await server.connect(transport);
     // Log to stderr since stdout is used for MCP communication
     console.error("Curl MCP Server running on stdio");
+}
+async function startHttpServer() {
+    const express = (await import("express")).default;
+    const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+    const app = express();
+    app.use(express.json({ limit: "10mb" }));
+    const apiKey = process.env.MCP_API_KEY;
+    const host = process.env.HOST || "127.0.0.1";
+    const port = parseInt(process.env.PORT || "3000", 10);
+    if (apiKey) {
+        app.use((req, res, next) => {
+            const xKey = (req.headers["x-api-key"] || "").toString();
+            const bearer = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
+            if (xKey !== apiKey && bearer !== apiKey) {
+                res.status(401).json({ error: "Unauthorized" });
+                return;
+            }
+            next();
+        });
+    }
+    else if (host !== "127.0.0.1" && host !== "localhost") {
+        console.error(`WARNING: MCP_API_KEY is not set and HOST=${host}. The server accepts unauthenticated requests from any network interface. Set MCP_API_KEY or bind to 127.0.0.1.`);
+    }
+    const handle = async (req, res) => {
+        const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+            enableJsonResponse: true,
+        });
+        res.on("close", () => transport.close());
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+    };
+    app.post("/mcp", handle);
+    app.get("/mcp", handle);
+    app.delete("/mcp", handle);
+    app.get("/health", (_req, res) => {
+        res.json({ status: "ok", transport: "http" });
+    });
+    app.listen(port, host, () => {
+        console.error(`Curl MCP Server running on http://${host}:${port}/mcp`);
+        if (!apiKey) {
+            console.error("NOTE: MCP_API_KEY is not set. Requests are accepted without authentication.");
+        }
+    });
 }
 main().catch((error) => {
     console.error("Fatal error in main():", error);
