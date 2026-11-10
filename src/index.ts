@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v1.2.0
+// v1.3.2
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -548,7 +548,7 @@ function applyCurlDefaults(args: string[]): string[] {
   const has = (f: string) => args.includes(f);
   const out = [...args];
   if (!has("--max-time") && !has("-m")) out.unshift("--max-time", "300");
-  if (!has("--max-filesize")) out.unshift("--max-filesize", "104857600");
+  if (!has("--max-filesize")) out.unshift("--max-filesize", "209715200");
   return out;
 }
 
@@ -684,6 +684,31 @@ async function startHttpServer() {
     message: { error: "Too many requests, try again later" },
   });
   app.use("/mcp", limiter);
+
+  // Log client IP on every /mcp request (for allowlist discovery and audit)
+  app.use("/mcp", (req: Request, _res: Response, next: () => void) => {
+    const clientIp = (req.ip || "unknown").replace(/^::ffff:/, "");
+    console.error(`[mcp] ${new Date().toISOString()} ip=${clientIp} method=${req.method} path=${req.path}`);
+    next();
+  });
+
+  const allowedIPs = (process.env.MCP_ALLOWED_IPS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (allowedIPs.length > 0) {
+    app.use("/mcp", (req: Request, res: Response, next: () => void) => {
+      const clientIp = (req.ip || "").replace(/^::ffff:/, "");
+      if (!allowedIPs.includes(clientIp)) {
+        console.error(`Blocked request from ${clientIp} (not in MCP_ALLOWED_IPS)`);
+        res.status(403).json({ error: "Forbidden: IP not allowlisted" });
+        return;
+      }
+      next();
+    });
+  } else {
+    console.error("NOTE: MCP_ALLOWED_IPS is not set. All source IPs are accepted (MCP_API_KEY still applies if set).");
+  }
 
   const apiKey = process.env.MCP_API_KEY;
   const host = process.env.HOST || "127.0.0.1";
