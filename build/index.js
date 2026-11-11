@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v1.3.2
+// v1.4.0
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -442,6 +442,62 @@ server.tool("curl_raw", "Execute curl with arbitrary arguments — full pass-thr
                     text: `Error executing curl: ${error instanceof Error ? error.message : String(error)}`,
                 },
             ],
+        };
+    }
+});
+// Tool: Read file from downloads directory (chunked)
+server.tool("read_file", "Read a file from the downloads directory (/opt/mcp-curl/downloads) in chunks. Returns base64-encoded data.", {
+    path: z.string().describe("Relative path to the file within /opt/mcp-curl/downloads"),
+    offset: z.number().optional().default(0).describe("Byte offset to start reading from"),
+    length: z.number().optional().default(65536).describe("Maximum number of bytes to read (default 64KB)"),
+}, async ({ path: relPath, offset, length }) => {
+    const baseDir = "/opt/mcp-curl/downloads";
+    const resolvedPath = path.resolve(baseDir, relPath);
+    if (!resolvedPath.startsWith(baseDir + path.sep) && resolvedPath !== baseDir) {
+        return { content: [{ type: "text", text: "Error: Access denied. Path must be inside the downloads directory." }] };
+    }
+    try {
+        const stat = await fsPromises.stat(resolvedPath);
+        if (!stat.isFile()) {
+            return { content: [{ type: "text", text: "Error: Not a regular file." }] };
+        }
+        const fileSize = stat.size;
+        const maxLen = Math.min(length, 10 * 1024 * 1024); // Cap at 10MB per request
+        if (offset >= fileSize) {
+            return { content: [{ type: "text", text: `Error: Offset ${offset} is beyond file size ${fileSize}.` }] };
+        }
+        const actualLength = Math.min(maxLen, fileSize - offset);
+        const fd = await fsPromises.open(resolvedPath, "r");
+        const buffer = Buffer.alloc(actualLength);
+        await fd.read(buffer, 0, actualLength, offset);
+        await fd.close();
+        const base64Data = buffer.toString("base64");
+        const nextOffset = offset + actualLength;
+        const hasMore = nextOffset < fileSize;
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        fileSize,
+                        offset,
+                        length: actualLength,
+                        nextOffset: hasMore ? nextOffset : null,
+                        hasMore,
+                        base64: base64Data
+                    }, null, 2)
+                }
+            ]
+        };
+    }
+    catch (error) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error reading file: ${error instanceof Error ? error.message : String(error)}`
+                }
+            ]
         };
     }
 });
