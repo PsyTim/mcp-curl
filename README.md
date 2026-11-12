@@ -1,4 +1,4 @@
-<!-- v1.3.4 -->
+<!-- v1.5.0 -->
 # MCP Server for Curl
 
 [![npm version](https://badge.fury.io/js/@247arjun%2Fmcp-curl.svg)](https://badge.fury.io/js/@247arjun%2Fmcp-curl)
@@ -22,6 +22,7 @@ A Model Context Protocol (MCP) server that provides curl functionality, allowing
 - **SSRF protection**: blocks cloud metadata (169.254.169.254), RFC1918, loopback by default
 - **Rate limiting**: configurable per-IP requests per minute
 - **Audit log**: every `curl_raw` invocation logged with secrets redacted
+- **File retrieval**: `read_file` tool for chunked base64 reads from the downloads directory
 - **HTTP transport**: Streamable HTTP endpoint for remote clients
 
 ## Installation
@@ -252,6 +253,16 @@ Returns `Error: Refusing to connect to private/loopback/link-local address 169.2
 
 **Memory warning (1 GB RAM servers):** `curl_raw` without `-o` buffers the **entire** response body in Node memory before truncating to `max_output_bytes` (1 MiB default). A single 200 MB download without `-o` = 200 MB peak RAM. Several concurrent large downloads can OOM a 1 GB VPS. **Always use `-o <file>` for downloads larger than 50 MB.** With `-o`, curl writes to disk and Node memory stays flat.
 
+### Notion AI Integration
+
+To connect this server to Notion AI:
+1. Add a new MCP Connection in Notion.
+2. **MCP server URL:** `https://<your-domain>/mcp`
+3. **Authentication:** Select `Bearer token`.
+4. **Prefix:** Change the dropdown to `Bearer` (do not use `Token`).
+5. **Token:** Paste your `MCP_API_KEY`.
+6. **(Optional but recommended)** In *Advanced settings*, add a custom header `X-API-Key` with your `MCP_API_KEY` as the value.
+
 ## HTTP Transport (Remote Clients)
 
 By default the server uses **stdio**. For remote access, enable **Streamable HTTP** via env vars.
@@ -350,6 +361,32 @@ Without `MCP_ALLOWED_IPS` set, the server logs every `/mcp` request to stderr wi
 On systemd: `sudo journalctl -u mcp-curl -f | grep '\[mcp\]'`
 
 Take the IP from the log, add to `MCP_ALLOWED_IPS`, restart the service.
+
+### 8. `read_file`
+
+Read a file from the `/opt/mcp-curl/downloads` directory (on the server) in chunks. Returns base64-encoded data.
+
+**Parameters:**
+- `path` (string, required): Relative path to the file within `downloads/`
+- `offset` (number, optional, default `0`): Byte offset to start reading from
+- `length` (number, optional, default `65536`): Maximum bytes to read (capped at 10 MB per request)
+
+**Example:**
+```json
+{ "path": "test.png", "offset": 0, "length": 1000000 }
+```
+**Response:**
+```json
+{
+  "fileSize": 224566,
+  "offset": 0,
+  "length": 224566,
+  "nextOffset": null,
+  "hasMore": false,
+  "base64": "iVBORw0KGgoAAAANSUhEUg..."
+}
+```
+*Tip: If `hasMore` is `true`, call `read_file` again with `offset` set to `nextOffset`.*
 
 ## Usage Examples
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v1.4.0
+// v1.5.1
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -635,6 +635,7 @@ async function startHttpServer() {
     const express = (await import("express")).default;
     const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
     const app = express();
+    app.set("trust proxy", true);
     app.use(express.json({ limit: "10mb" }));
     const { default: rateLimit } = await import("express-rate-limit");
     const limiter = rateLimit({
