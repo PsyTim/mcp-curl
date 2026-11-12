@@ -142,3 +142,7 @@ curl_raw.log
 APIKEY
 *.key
 .env*
+
+# Runtime files
+.lesshst
+downloads/
