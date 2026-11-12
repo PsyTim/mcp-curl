@@ -137,3 +137,8 @@ README_OLD.md
 
 # curl_raw audit log
 curl_raw.log
+
+# Secrets - NEVER commit
+APIKEY
+*.key
+.env*
