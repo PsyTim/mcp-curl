@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v1.5.2
+// v1.7.0
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,14 +16,19 @@ import * as path from "path";
 const execAsync = promisify(exec);
 
 // Create server instance
-const server = new McpServer({
-  name: "mcp-curl",
-  version: "1.0.0",
-  capabilities: {
-    resources: {},
-    tools: {},
+const server = new McpServer(
+  {
+    name: "mcp-curl",
+    version: "1.0.0",
   },
-});
+  {
+    capabilities: {
+      resources: {},
+      tools: {},
+    },
+    instructions: "# mcp-curl — правила работы\n\n## Скачивание файлов\n- Используй curl_raw (НЕ curl_download — он падает с Exit Code 23 из-за read-only FS)\n- Сохраняй в downloads/<имя> (относительный путь, не абсолютный)\n- Для больших файлов: args = [\"-sS\", \"-L\", \"--max-time\", \"600\", \"-o\", \"downloads/<имя>\", \"<URL>\"]\n- -L следует редиректам (нужно для Yandex Disk, Google Drive, Dropbox)\n- -sS — тихий режим без прогресс-бара\n- После скачивания проверь Exit Code: 0\n\n## Чтение файлов\n- read_file с length: 262144 (256 KB) и offset: 0\n- Если ответ содержит hasMore: true — повтори с offset: nextOffset\n- Строго последовательно, без Promise.all (клиентский таймаут ~60 секунд)\n- Максимум 10 MB за один запрос\n\n## Ошибки\n- Exit Code: 23 — используй -o downloads/<файл>, не просто -o <файл>\n- 429 Too Many Requests — подожди 60 секунд\n- -32001 Request timed out — уменьши length до 262144\n- 403 с Cloudflare challenge — найди прямую ссылку через API (Yandex Disk public API)\n\n## Безопасность\n- allow_unsafe: true обязателен для записи файлов\n- allow_private: true только для приватных IP (не нужно для публичных URL)",
+  }
+);
 
 // Helper function to execute curl command safely
 async function executeCurl(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -361,7 +366,7 @@ server.tool(
 // Tool: Download file
 server.tool(
   "curl_download",
-  "Download a file using curl",
+  "Download a file. WARNING: writes to working directory which may be read-only (Exit Code 23). Prefer curl_raw with -o downloads/<name> instead.",
   {
     url: z.string().describe("The URL of the file to download"),
     output_filename: z.string().optional().describe("Output filename (if not provided, will use remote filename)"),
@@ -486,7 +491,7 @@ server.tool(
 // Tool: Raw curl — full argument pass-through (no blacklist, requires allow_unsafe)
 server.tool(
   "curl_raw",
-  "Execute curl with arbitrary arguments — full pass-through, no blacklist. Requires allow_unsafe: true. Use with caution: this tool can read/write local files (-o, -T), send arbitrary data (-d, -F), use custom certs (--cert, --key), and route via proxies (--proxy).",
+  "Execute curl with arbitrary arguments — full pass-through, no blacklist. Requires allow_unsafe: true. Use with caution: this tool can read/write local files (-o, -T), send arbitrary data (-d, -F), use custom certs (--cert, --key), and route via proxies (--proxy). For downloading files: use args=[\"-sS\",\"-L\",\"--max-time\",\"600\",\"-o\",\"downloads/<name>\",\"<URL>\"] — file MUST be saved to downloads/<name> (relative path) because the rest of the filesystem is read-only. After download, use read_file to retrieve content.",
   {
     args: z.array(z.string()).describe("Array of curl arguments (excluding 'curl' itself)"),
     allow_unsafe: z.boolean().describe("Explicit confirmation to run curl without safety checks"),
@@ -547,7 +552,7 @@ server.tool(
 // Tool: Read file from downloads directory (chunked)
 server.tool(
   "read_file",
-  "Read a file from the downloads directory (/opt/mcp-curl/downloads) in chunks. Returns base64-encoded data.",
+  "Read a file from /opt/mcp-curl/downloads in chunks (base64). Default chunk 64KB; recommended 262144 (256KB) for files >1MB. If response has hasMore:true, call again with offset=<nextOffset> sequentially — do NOT parallelize (client timeout ~60s). Max 10MB per request.",
   {
     path: z.string().describe("Relative path to the file within /opt/mcp-curl/downloads"),
     offset: z.number().optional().default(0).describe("Byte offset to start reading from"),
@@ -594,6 +599,7 @@ server.tool(
               length: actualLength,
               nextOffset: hasMore ? nextOffset : null,
               hasMore,
+              hint: hasMore ? "Call read_file again with offset=" + nextOffset + " to continue" : "File fully read",
               base64: base64Data
             }, null, 2)
           }
